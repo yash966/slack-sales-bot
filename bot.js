@@ -75,49 +75,68 @@ function generateChartUrl(data, chartType, question) {
   // Find value column (revenue, count, rating, etc.)
   const valueKey = keys.find(k => 
     k.includes('revenue') || k.includes('total') || 
-    k.includes('count') || k.includes('rating') || k.includes('sales')
+    k.includes('count') || k.includes('rating') || k.includes('sales') ||
+    k.includes('quantity')
   ) || keys[keys.length - 1];
   
   // Prepare data (limit to top 10 for readability)
   const chartData = data.slice(0, 10);
-  labels = chartData.map(row => String(row[labelKey]));
-  values = chartData.map(row => Number(row[valueKey]));
+  labels = chartData.map(row => String(row[labelKey] || ''));
+  values = chartData.map(row => {
+    const val = row[valueKey];
+    return typeof val === 'string' ? parseFloat(val) : Number(val) || 0;
+  });
   
   // Set title and value label
   title = labelKey.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
   valueLabel = valueKey.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
   
   // Truncate long labels
-  labels = labels.map(l => l.length > 20 ? l.substring(0, 17) + '...' : l);
+  labels = labels.map(l => {
+    const str = String(l);
+    return str.length > 15 ? str.substring(0, 12) + '...' : str;
+  });
   
   // Color schemes
-  const colors = {
-    bar: ['#36a2eb', '#ff6384', '#4bc0c0', '#ff9f40', '#9966ff', '#ffcd56', '#c9cbcf', '#36eb9f', '#eb3669', '#69eb36'],
-    pie: ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40', '#FF6384', '#C9CBCF', '#7BC225', '#E83E8C'],
-    line: '#36a2eb'
-  };
+  const barColors = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40', '#FF6384', '#C9CBCF', '#7BC225', '#E83E8C'];
   
   let chartConfig;
   
-  if (chartType === 'pie') {
+  if (chartType === 'pie' || chartType === 'doughnut') {
+    // Simpler pie chart configuration
     chartConfig = {
       type: 'pie',
       data: {
         labels: labels,
         datasets: [{
           data: values,
-          backgroundColor: colors.pie
+          backgroundColor: barColors
         }]
       },
       options: {
         plugins: {
+          legend: {
+            position: 'bottom',
+            labels: {
+              boxWidth: 12,
+              padding: 10,
+              font: { size: 11 }
+            }
+          },
           title: {
             display: true,
             text: title,
-            font: { size: 16 }
+            font: { size: 16, weight: 'bold' }
           },
-          legend: {
-            position: 'right'
+          datalabels: {
+            display: true,
+            color: '#fff',
+            font: { weight: 'bold', size: 12 },
+            formatter: (value, context) => {
+              const sum = context.dataset.data.reduce((a, b) => a + b, 0);
+              const percentage = ((value * 100) / sum).toFixed(1);
+              return percentage > 5 ? percentage + '%' : '';
+            }
           }
         }
       }
@@ -131,8 +150,11 @@ function generateChartUrl(data, chartType, question) {
           label: valueLabel,
           data: values,
           fill: false,
-          borderColor: colors.line,
-          tension: 0.1
+          borderColor: '#36A2EB',
+          backgroundColor: '#36A2EB',
+          tension: 0.1,
+          pointRadius: 5,
+          pointHoverRadius: 7
         }]
       },
       options: {
@@ -140,17 +162,23 @@ function generateChartUrl(data, chartType, question) {
           title: {
             display: true,
             text: title,
-            font: { size: 16 }
-          }
+            font: { size: 16, weight: 'bold' }
+          },
+          legend: { display: false }
         },
         scales: {
           y: {
-            beginAtZero: true
+            beginAtZero: true,
+            ticks: { font: { size: 11 } }
+          },
+          x: {
+            ticks: { font: { size: 10 } }
           }
         }
       }
     };
-  } else { // bar chart (default)
+  } else {
+    // Bar chart (default)
     chartConfig = {
       type: 'bar',
       data: {
@@ -158,7 +186,7 @@ function generateChartUrl(data, chartType, question) {
         datasets: [{
           label: valueLabel,
           data: values,
-          backgroundColor: colors.bar
+          backgroundColor: barColors
         }]
       },
       options: {
@@ -166,25 +194,121 @@ function generateChartUrl(data, chartType, question) {
           title: {
             display: true,
             text: title,
-            font: { size: 16 }
-          }
+            font: { size: 16, weight: 'bold' }
+          },
+          legend: { display: false }
         },
         scales: {
           y: {
-            beginAtZero: true
+            beginAtZero: true,
+            ticks: { font: { size: 11 } }
+          },
+          x: {
+            ticks: { 
+              font: { size: 10 },
+              maxRotation: 45,
+              minRotation: 45
+            }
           }
         }
       }
     };
   }
   
-  // Encode chart config for URL
-  const encodedConfig = encodeURIComponent(JSON.stringify(chartConfig));
-  return `https://quickchart.io/chart?c=${encodedConfig}&width=700&height=400&backgroundColor=white`;
+  // Create URL with proper encoding
+  const chartJson = JSON.stringify(chartConfig);
+  const encoded = encodeURIComponent(chartJson);
+  
+  return `https://quickchart.io/chart?w=800&h=500&c=${encoded}`;
 }
 
 // Store successful queries for learning
 const queryHistory = [];
+
+// Generate AI summary of results
+async function generateResultSummary(data, question) {
+  try {
+    // Skip summary for single-value results
+    if (data.length === 1 && Object.keys(data[0]).length === 1) {
+      return null;
+    }
+    
+    // Prepare data summary
+    const dataPreview = data.slice(0, 5).map(row => 
+      Object.entries(row)
+        .map(([key, val]) => `${key}: ${val}`)
+        .join(', ')
+    ).join('\n');
+    
+    const prompt = `You are analyzing sales data results. Provide a brief, insightful summary in 2-3 sentences.
+
+User asked: "${question}"
+
+Data returned (first 5 rows):
+${dataPreview}
+
+Total rows: ${data.length}
+
+Provide a clear, actionable summary that highlights:
+1. Key finding or trend
+2. Notable insight or comparison
+3. Brief recommendation (if applicable)
+
+Keep it concise, professional, and valuable. Max 3 sentences.`;
+
+    const message = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 200,
+      temperature: 0.7,
+      messages: [{
+        role: 'user',
+        content: prompt
+      }]
+    });
+
+    return message.content[0].text.trim();
+  } catch (error) {
+    console.error('Summary generation error:', error);
+    return null;
+  }
+}
+
+// Check if question is related to sales data
+async function isQuestionRelevant(question) {
+  // Keywords that suggest sales/data queries
+  const salesKeywords = [
+    'sales', 'revenue', 'product', 'category', 'country', 'rating', 'sold', 
+    'top', 'best', 'worst', 'highest', 'lowest', 'average', 'total', 'count',
+    'how many', 'show me', 'chart', 'graph', 'visualize', 'compare', 'breakdown',
+    'electronics', 'clothing', 'furniture', 'beauty', 'sports', 'pet', 'baby',
+    'usa', 'canada', 'uk', 'germany', 'france', 'australia', 'japan',
+    'profitable', 'performance', 'metrics', 'analysis', 'data', 'report'
+  ];
+  
+  const lowerQuestion = question.toLowerCase();
+  
+  // Check if question contains any sales-related keywords
+  const hasRelevantKeyword = salesKeywords.some(keyword => 
+    lowerQuestion.includes(keyword)
+  );
+  
+  // Obvious off-topic patterns
+  const offTopicPatterns = [
+    /weather/i, /joke/i, /recipe/i, /movie/i, /song/i, /game/i,
+    /tell me about/i, /who is/i, /what is the capital/i, /translate/i,
+    /play/i, /music/i, /video/i, /news/i, /sports score/i,
+    /what time/i, /set alarm/i, /remind me/i, /calculate/i,
+    /meaning of life/i, /how old/i, /who won/i, /current president/i
+  ];
+  
+  const isOffTopic = offTopicPatterns.some(pattern => pattern.test(lowerQuestion));
+  
+  if (isOffTopic) return false;
+  if (hasRelevantKeyword) return true;
+  
+  // If unclear, assume it might be relevant (let AI decide)
+  return true;
+}
 
 // AI-powered question processing using Claude with Few-Shot Learning
 async function processQuestionWithAI(question) {
@@ -210,12 +334,28 @@ Columns:
 
 ${recentExamples ? `SUCCESSFUL EXAMPLES FROM THIS SESSION:\n${recentExamples}\n\n` : ''}
 
+CRITICAL FILTERING RULES - MUST FOLLOW:
+1. **CATEGORY FILTER IS MANDATORY** when user mentions ANY category name
+   - "electronics" → WHERE category = 'Electronics'
+   - "clothing" → WHERE category = 'Clothing'
+   - "furniture" → WHERE category = 'Furniture'
+   - NEVER return results without category filter when category is mentioned!
+
+2. **COUNTRY FILTER IS MANDATORY** when user mentions ANY country
+   - "USA" → WHERE country = 'USA'
+   - "Canada" → WHERE country = 'Canada'
+   - NEVER return results without country filter when country is mentioned!
+
+3. **ALWAYS validate your WHERE clause** before returning
+   - If user says "clothing products", your query MUST have: WHERE category = 'Clothing'
+   - If user says "USA sales", your query MUST have: WHERE country = 'USA'
+
 DETAILED QUERY PATTERNS:
 
 1. BEST-SELLING / MOST SOLD (by quantity):
    SELECT product_name, SUM(quantity_sold) as total_quantity 
    FROM sales_data 
-   WHERE category = 'CategoryName'  -- if category mentioned
+   WHERE category = 'CategoryName'  -- MANDATORY if category mentioned
    GROUP BY product_name 
    ORDER BY total_quantity DESC 
    LIMIT X
@@ -223,7 +363,7 @@ DETAILED QUERY PATTERNS:
 2. TOP REVENUE / MOST PROFITABLE:
    SELECT product_name, ROUND(SUM(revenue), 2) as total_revenue 
    FROM sales_data 
-   WHERE category = 'CategoryName'  -- if category mentioned
+   WHERE category = 'CategoryName'  -- MANDATORY if category mentioned
    GROUP BY product_name 
    ORDER BY total_revenue DESC 
    LIMIT X
@@ -231,9 +371,9 @@ DETAILED QUERY PATTERNS:
 3. HIGHEST RATED:
    SELECT product_name, ROUND(AVG(rating), 2) as avg_rating, COUNT(*) as review_count
    FROM sales_data 
-   WHERE category = 'CategoryName'  -- if category mentioned
+   WHERE category = 'CategoryName'  -- MANDATORY if category mentioned
    GROUP BY product_name 
-   HAVING COUNT(*) >= 3  -- minimum reviews for reliability
+   HAVING COUNT(*) >= 3
    ORDER BY avg_rating DESC 
    LIMIT X
 
@@ -258,12 +398,26 @@ DETAILED QUERY PATTERNS:
 7. FILTERED QUERIES (multiple conditions):
    SELECT product_name, ROUND(SUM(revenue), 2) as total_revenue
    FROM sales_data 
-   WHERE category = 'Electronics' 
-     AND country = 'USA'
+   WHERE category = 'Electronics'  -- EXACT category name
+     AND country = 'USA'           -- EXACT country name
      AND rating >= 4.5
    GROUP BY product_name 
    ORDER BY total_revenue DESC 
    LIMIT X
+
+COMMON USER QUESTIONS & CORRECT RESPONSES:
+
+Q: "top 5 best-selling products in electronics"
+✓ CORRECT: SELECT product_name, SUM(quantity_sold) as total_quantity FROM sales_data WHERE category = 'Electronics' GROUP BY product_name ORDER BY total_quantity DESC LIMIT 5
+✗ WRONG: SELECT without WHERE category = 'Electronics'
+
+Q: "best selling clothing products"
+✓ CORRECT: SELECT product_name, SUM(quantity_sold) as total_quantity FROM sales_data WHERE category = 'Clothing' GROUP BY product_name ORDER BY total_quantity DESC LIMIT 10
+✗ WRONG: SELECT without WHERE category = 'Clothing'
+
+Q: "top products in USA"
+✓ CORRECT: SELECT product_name, SUM(revenue) as total_revenue FROM sales_data WHERE country = 'USA' GROUP BY product_name ORDER BY total_revenue DESC LIMIT 10
+✗ WRONG: SELECT without WHERE country = 'USA'
 
 CRITICAL RULES:
 ✓ Category/Country names are CASE-SENSITIVE - use exact values from schema
@@ -275,17 +429,18 @@ CRITICAL RULES:
 ✓ Default LIMIT is 10, adjust based on user request (top 5 = LIMIT 5)
 ✓ PostgreSQL syntax only
 
-COMMON MISTAKES TO AVOID:
-✗ Don't forget WHERE clause when category/country mentioned
-✗ Don't use quantity_sold without SUM() for aggregations
-✗ Don't forget GROUP BY when using aggregations
-✗ Don't use wrong category names (check exact spelling)
+VALIDATION CHECKLIST BEFORE RETURNING:
+□ User mentioned "electronics"? → Query has WHERE category = 'Electronics'
+□ User mentioned "clothing"? → Query has WHERE category = 'Clothing'
+□ User mentioned "USA"? → Query has WHERE country = 'USA'
+□ User said "best-selling"? → Query uses SUM(quantity_sold)
+□ User said "top revenue"? → Query uses SUM(revenue)
 
 User question: "${question}"
 
 Analyze and respond with JSON only:
 {
-  "sql": "Complete PostgreSQL SELECT query",
+  "sql": "Complete PostgreSQL SELECT query with MANDATORY WHERE clause if category/country mentioned",
   "chartType": "bar" | "pie" | "line" | null,
   "explanation": "What this query returns"
 }
@@ -301,7 +456,7 @@ Return ONLY the JSON object.`;
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 1500,
-      temperature: 0.3, // Lower temperature for more consistent/accurate outputs
+      temperature: 0.1, // Very low temperature for accuracy
       messages: [{
         role: 'user',
         content: prompt
@@ -646,8 +801,28 @@ app.event('app_mention', async ({ event, client, say }) => {
     
     if (!question) {
       await say({
-        text: '👋 Hi! Ask me about the Amazon sales data! Try:\n• "What are the total sales?"\n• "Show me top products"\n• "Sales by category"\n• "Average rating"',
-        thread_ts: event.ts
+        text: '👋 Hi! Ask me about the Amazon sales data! Try:\n• "What are the total sales?"\n• "Show me top products"\n• "Sales by category"\n• "Average rating"'
+      });
+      return;
+    }
+    
+    // Check if it's a greeting or casual conversation
+    const greetings = ['hi', 'hello', 'hey', 'good morning', 'good afternoon', 'good evening', 'how are you', "what's up", 'sup', 'howdy'];
+    const isGreeting = greetings.some(g => question.toLowerCase().includes(g) && question.split(' ').length <= 5);
+    
+    if (isGreeting) {
+      await say({
+        text: '👋 Hello! I\'m your Sales Assistant. I can help you analyze Amazon sales data!\n\nTry asking me:\n• "What are the total sales?"\n• "Show me top products"\n• "Pie chart of sales by category"\n• "Which products have rating above 4.5?"\n• "Compare sales between USA and Canada"'
+      });
+      return;
+    }
+    
+    // Check if question is relevant to sales data
+    const isRelevant = await isQuestionRelevant(question);
+    
+    if (!isRelevant) {
+      await say({
+        text: "🤔 I'm specialized in analyzing Amazon sales data. I can't help with that question, but I'd love to help you with:\n\n📊 Sales Analysis:\n• Total sales and revenue\n• Top products and categories\n• Sales by country\n• Product ratings\n\n📈 Visualizations:\n• Charts and graphs\n• Sales comparisons\n• Performance metrics\n\nTry asking something like: \"What are the top selling products in electronics?\""
       });
       return;
     }
@@ -655,8 +830,7 @@ app.event('app_mention', async ({ event, client, say }) => {
     // Show thinking indicator
     await client.chat.postMessage({
       channel: event.channel,
-      text: '🤔 Analyzing your question...',
-      thread_ts: event.ts
+      text: '🤔 Analyzing your question...'
     });
     
     // Try AI processing first
@@ -669,8 +843,7 @@ app.event('app_mention', async ({ event, client, say }) => {
     
     if (!queryResult) {
       await say({
-        text: "🤷 I'm not sure how to answer that. Try asking:\n• Total sales or revenue\n• Top products/categories\n• Sales by country\n• Average ratings\n• Recent sales\n\n💡 *Tip:* Add 'chart', 'graph', 'pie chart', or 'line chart' to visualize data!",
-        thread_ts: event.ts
+        text: "🤷 I'm not sure how to answer that. Try asking:\n• Total sales or revenue\n• Top products/categories\n• Sales by country\n• Average ratings\n• Recent sales\n\n💡 *Tip:* Add 'chart', 'graph', 'pie chart', or 'line chart' to visualize data!"
       });
       return;
     }
@@ -697,8 +870,7 @@ app.event('app_mention', async ({ event, client, say }) => {
             alt_text: "Chart visualization"
           }
         ],
-        text: "Chart generated",
-        thread_ts: event.ts
+        text: "Chart generated"
       });
     }
     
@@ -708,21 +880,35 @@ app.event('app_mention', async ({ event, client, say }) => {
     if (formattedResults.blocks) {
       await say({
         blocks: formattedResults.blocks,
-        text: 'Query results', // Fallback text for notifications
-        thread_ts: event.ts
+        text: 'Query results'
       });
     } else {
       await say({
-        text: formattedResults,
-        thread_ts: event.ts
+        text: formattedResults
+      });
+    }
+    
+    // Generate and send AI summary
+    const summary = await generateResultSummary(results, question);
+    if (summary) {
+      await say({
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `💡 *Key Insights:*\n${summary}`
+            }
+          }
+        ],
+        text: `Key Insights: ${summary}`
       });
     }
     
   } catch (error) {
     console.error('Error processing mention:', error);
     await say({
-      text: `❌ Oops! Something went wrong: ${error.message}`,
-      thread_ts: event.ts
+      text: `❌ Oops! Something went wrong: ${error.message}`
     });
   }
 });
@@ -737,9 +923,20 @@ app.message(async ({ message, say }) => {
     
     if (!question) return;
     
-    // Welcome message for simple greetings
-    if (['hi', 'hello', 'hey'].includes(question.toLowerCase())) {
-      await say('👋 Hello! I can help you analyze Amazon sales data. Try asking:\n• "What are the total sales?"\n• "Show me top products"\n• "Sales by category"');
+    // Check if it's a greeting or casual conversation
+    const greetings = ['hi', 'hello', 'hey', 'good morning', 'good afternoon', 'good evening', 'how are you', "what's up", 'sup', 'howdy'];
+    const isGreeting = greetings.some(g => question.toLowerCase().includes(g) && question.split(' ').length <= 5);
+    
+    if (isGreeting) {
+      await say('👋 Hello! I\'m your Sales Assistant. I can help you analyze Amazon sales data!\n\nTry asking:\n• "What are the total sales?"\n• "Show me top products"\n• "Pie chart of sales by category"\n• "Which products have rating above 4.5?"');
+      return;
+    }
+    
+    // Check if question is relevant to sales data
+    const isRelevant = await isQuestionRelevant(question);
+    
+    if (!isRelevant) {
+      await say("🤔 I'm specialized in analyzing Amazon sales data. I can't help with that question, but I'd love to help you with:\n\n📊 Sales Analysis:\n• Total sales and revenue\n• Top products and categories\n• Sales by country\n• Product ratings\n\n📈 Visualizations:\n• Charts and graphs\n• Sales comparisons\n\nTry asking: \"What are the top selling products in electronics?\"");
       return;
     }
     
@@ -789,10 +986,27 @@ app.message(async ({ message, say }) => {
     if (formattedResults.blocks) {
       await say({
         blocks: formattedResults.blocks,
-        text: 'Query results' // Fallback text for notifications
+        text: 'Query results'
       });
     } else {
       await say(formattedResults);
+    }
+    
+    // Generate and send AI summary
+    const summary = await generateResultSummary(results, question);
+    if (summary) {
+      await say({
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `💡 *Key Insights:*\n${summary}`
+            }
+          }
+        ],
+        text: `Key Insights: ${summary}`
+      });
     }
     
   } catch (error) {
